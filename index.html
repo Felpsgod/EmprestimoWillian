@@ -732,6 +732,7 @@
         
         // Variável para controlar duplicação
         let isAdding = false;
+        let lastAddedId = null;
         
         // Função para mostrar notificação
         function mostrarNotificacao(mensagem, tipo = 'success') {
@@ -785,13 +786,19 @@
         
         // Função para adicionar um novo empréstimo
         function adicionarEmprestimo(nome, dataEmprestimo, valorEmprestimo, dataVencimento, porcentagem) {
-            if (isAdding) return; // Previne duplicação
+            if (isAdding) {
+                mostrarNotificacao('Aguarde, empréstimo sendo processado...', 'warning');
+                return;
+            }
             
             isAdding = true;
+            const emprestimoId = Date.now();
+            lastAddedId = emprestimoId;
+            
             const valorTotal = calcularValorTotal(valorEmprestimo, porcentagem);
             
             const emprestimo = {
-                id: Date.now(),
+                id: emprestimoId,
                 nome,
                 dataEmprestimo: dataEmprestimo,
                 valorOriginal: valorEmprestimo,
@@ -804,11 +811,11 @@
             };
             
             // Salvar no Firebase
-            salvarNoFirebase(emprestimo, nome, valorTotal);
+            salvarNoFirebase(emprestimo);
         }
         
         // Função para salvar no Firebase
-        function salvarNoFirebase(emprestimo, nome, valorTotal) {
+        function salvarNoFirebase(emprestimo) {
             submitBtn.innerHTML = '<div class="loading"></div> Salvando...';
             submitBtn.disabled = true;
             
@@ -818,12 +825,8 @@
                     submitBtn.disabled = false;
                     isAdding = false;
                     
-                    // Adicionar ao array local
-                    emprestimos.push(emprestimo);
-                    
-                    // Atualizar interface
-                    atualizarDashboard();
-                    renderizarCards();
+                    // O Firebase já vai atualizar automaticamente via listener
+                    // Não adicionamos manualmente ao array para evitar duplicação
                     
                     // Mostrar comprovante
                     mostrarComprovante(emprestimo);
@@ -831,10 +834,13 @@
                     // Mostrar notificação
                     mostrarNotificacao('Empréstimo cadastrado com sucesso!');
                     
+                    // Limpar formulário
+                    limparFormulario();
+                    
                     // Verificar se é um vencimento próximo
                     if (dataProxima(emprestimo.dataVencimento)) {
                         mostrarNotificacao(
-                            `Atenção: Empréstimo de ${nome} vence em ${formatarData(emprestimo.dataVencimento)}!`, 
+                            `Atenção: Empréstimo de ${emprestimo.nome} vence em ${formatarData(emprestimo.dataVencimento)}!`, 
                             'warning'
                         );
                     }
@@ -846,6 +852,21 @@
                     isAdding = false;
                     mostrarNotificacao('Erro ao salvar no Firebase', 'error');
                 });
+        }
+        
+        // Função para limpar formulário
+        function limparFormulario() {
+            document.getElementById('nome').value = '';
+            document.getElementById('valorEmprestimo').value = '';
+            valorTotalDiv.classList.add('hidden');
+            
+            // Manter datas padrão
+            const hoje = new Date().toISOString().split('T')[0];
+            document.getElementById('dataEmprestimo').value = hoje;
+            
+            const vencimento = new Date();
+            vencimento.setDate(vencimento.getDate() + 30);
+            document.getElementById('dataVencimento').value = vencimento.toISOString().split('T')[0];
         }
         
         // Função para mostrar comprovante
@@ -929,6 +950,9 @@
                         emprestimos.push(data[key]);
                     });
                 }
+                
+                // Ordenar por data de criação (mais recentes primeiro)
+                emprestimos.sort((a, b) => new Date(b.dataCriacao) - new Date(a.dataCriacao));
                 
                 atualizarDashboard();
                 renderizarCards();
@@ -1021,16 +1045,11 @@
         
         // Função para renderizar os cards
         function renderizarCards() {
-            // Ordenar empréstimos por data de vencimento
-            const emprestimosOrdenados = [...emprestimos].sort((a, b) => {
-                return new Date(a.dataVencimento) - new Date(b.dataVencimento);
-            });
-            
             // Limpar grid
             loansGrid.innerHTML = '';
             
             // Adicionar cards
-            emprestimosOrdenados.forEach(emprestimo => {
+            emprestimos.forEach(emprestimo => {
                 const card = document.createElement('div');
                 card.className = 'loan-card';
                 
@@ -1119,8 +1138,6 @@
                 emprestimo.dataPagamento = new Date().toISOString();
                 
                 atualizarNoFirebase(emprestimo);
-                atualizarDashboard();
-                renderizarCards();
                 mostrarNotificacao('Empréstimo marcado como PAGO. Juros contabilizados.');
             }
         }
@@ -1149,8 +1166,6 @@
                 emprestimo.valorAtual = emprestimo.valorOriginal + juros;
                 
                 atualizarNoFirebase(emprestimo);
-                atualizarDashboard();
-                renderizarCards();
                 mostrarNotificacao('Juros pagos. Novo vencimento: ' + formatarData(emprestimo.dataVencimento));
             }
         }
@@ -1177,8 +1192,6 @@
                 emprestimo.historicoJuros.push(naoPagamento);
                 
                 atualizarNoFirebase(emprestimo);
-                atualizarDashboard();
-                renderizarCards();
                 mostrarNotificacao('Juros aplicados. Novo valor: ' + formatarMoeda(emprestimo.valorAtual));
             }
         }
@@ -1190,8 +1203,6 @@
                 emprestimo.status = 'pendente';
                 delete emprestimo.dataPagamento;
                 atualizarNoFirebase(emprestimo);
-                atualizarDashboard();
-                renderizarCards();
                 mostrarNotificacao('Empréstimo reaberto');
             }
         }
@@ -1202,10 +1213,7 @@
                 const index = emprestimos.findIndex(emp => emp.id === id);
                 if (index !== -1) {
                     const nome = emprestimos[index].nome;
-                    emprestimos.splice(index, 1);
                     excluirDoFirebase(id);
-                    atualizarDashboard();
-                    renderizarCards();
                     mostrarNotificacao(`Empréstimo de ${nome} excluído com sucesso`);
                 }
             }
@@ -1239,18 +1247,6 @@
             valorTotalDiv.classList.remove('hidden');
             
             adicionarEmprestimo(nome, dataEmprestimo, valorEmprestimo, dataVencimento, porcentagem);
-            
-            // Limpar formulário
-            document.getElementById('nome').value = '';
-            document.getElementById('valorEmprestimo').value = '';
-            
-            // Manter datas padrão
-            const hoje = new Date().toISOString().split('T')[0];
-            document.getElementById('dataEmprestimo').value = hoje;
-            
-            const vencimento = new Date();
-            vencimento.setDate(vencimento.getDate() + 30);
-            document.getElementById('dataVencimento').value = vencimento.toISOString().split('T')[0];
         });
         
         // Fechar modal
